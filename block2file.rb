@@ -123,17 +123,11 @@ end
 
 GeomError = Struct.new(:date,:geom,:op,:off,:len)
 
-# XXX weird crap in trailing comments to fix broken vim indentation
-RE_GEOMERR = /
-	(GEOM_\S+): \s			# GEOM_FOO \
-	(\S+) \s failed \s	# g_foo_read_done() failed \
-	(\S+) 							# ad0s1d \
-	\[(\S+)\(						# READ 				#\)\](
-		offset=(\d+),\s		# offset=1234,
-		length=(\d+)			# length=512
-\)\]/x
-
 FSDB_FINDBLK_MAXARGC = 32
+
+# GEOM_FOO: g_foo_read_done() failed ad0s1d[READ(offset=123456, length=512)]
+RE_GEOMERR = /(GEOM_\S+): (\S+) failed (\S+)\[(\S+)\(offset=(\d+), length=(\d+)\)\]/
+	//x # XXX fix vim indent
 
 errors = []
 while gets do
