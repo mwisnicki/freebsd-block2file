@@ -1,0 +1,143 @@
+#!/usr/bin/env ruby
+# vim: set ai ts=2 sw=2:
+
+require 'date'
+require 'ostruct'
+require 'rexml/document'
+
+def OpenStruct.nested(hash)
+	OpenStruct.new(hash.inject({}) {|r,p|
+		r[p[0]] = p[1].kind_of?(Hash) ? OpenStruct.nested(p[1]) : p[1]; r
+	})
+end
+
+def ffsinfo(dev)
+	IO.popen "ffsinfo -l 1 #{dev}" do |io|
+		kw = {}
+		stack = []
+		io.each_line do |line|
+			case line
+			when /^#/
+			when /^=+ START (.*) =+$/
+				stack.push kw
+				case io.readline
+				when /^# (\d+)@(\S+): (\S+) (\S+)/
+					kw = kw[$4] = {}
+				end
+			when /^=+ END (.*) =+$/
+				kw = stack.pop
+			when /^(\S+)[^"]+\s+"(.*)"$/ # string
+				kw[$1] = $2
+			when /^(\S+).*\]\S+(.+)/ # array
+				kw[$1] = $2.split.map {|i| Integer i }
+			when /^(\S+).*\s(.+)$/ # int
+				kw[$1] = Integer $2
+			end
+		end
+		OpenStruct.nested kw
+	end
+end
+
+$gmesh = REXML::Document.new `sysctl -b kern.geom.confxml`.strip
+
+class FSInfo
+	# sector size of geom provider
+	attr_reader :gsectorsize
+	# fsbtodb factor
+	attr_reader :fsbtodb
+	# underlying device (geom name)
+	attr_reader :dev
+
+	# Cache instances since REXML is dog slow
+	@@CACHED = {}
+
+	# @param geomdev short gom device name
+	# @return cached FSInfo
+	def FSInfo.get(geomdev)
+		@@CACHED[geomdev] ||= FSInfo.new(geomdev)
+	end
+
+	# @param geom device name
+	def initialize(geomdev)
+		@dev = geomdev
+		@sblock = ffsinfo(dev).sblock
+		@fsbtodb = @sblock.fsbtodb
+		@gsectorsize = Integer REXML::XPath.
+			first($gmesh, '//provider[name=$dev]/sectorsize', nil, 'dev' => dev).text
+	end
+
+	# @param offset geom offset in bytes
+	# @return disk? block XXX verify
+	def goffset2diskblock(offset)
+		# TODO
+	end
+
+	# disk_block = fs_block * (2** fsbtodb)
+
+	def fs2disk_block(fs_block)
+		fs_block << fsbtodb
+	end
+	def disk2fs_block(disk_block)
+		disk_block >> fsbtodb
+	end
+
+	# @param disk_block number (TODO up to 32)
+	# @return inode number or nil # TODO block=>[inode]
+	def findblk(*disk_block)
+		# TODO
+		puts "FINDBLK #{disk_block.join ' '}"
+	end
+end
+
+GeomError = Struct.new(:date,:geom,:op,:off,:len)
+
+RE_GEOMERR = /
+	# GEOM_FOO
+	(GEOM_\S+): \s
+# g_foo_read_done() failed
+(\S+) \s failed \s
+# ad0s1d
+(\S+)
+# READ
+\[(\S+)\(
+	# in bytes
+	offset=(\d+),\s
+	length=(\d+)
+	\)\]
+	/x
+
+	FSDB_FINDBLK_MAXARGC = 32
+
+	errors = []
+	while gets do
+		for gclass,fun,geom,op,off,len in scan(RE_GEOMERR) do
+			begin # try to parse date like in syslog
+				date = DateTime.strptime($_, '%b %e %T')
+			rescue ArgumentError
+			end
+			errors << GeomError.new(date, geom, op, Integer(off), Integer(len))
+		end
+	end
+
+	for geom,gerrors in errors.group_by {|e|e.geom} do
+		puts "GEOM #{geom}"
+		fsinfo = FSInfo.get(geom)
+
+		# findblk handles up to 32 blocks per run
+
+		# Each offset+length is unique location
+		# Maybe group by offset and select largest length ?
+		for loc,lerrors in gerrors.group_by {|e|[e.off,e.len]} do
+			off,len = loc
+			puts "  OFFSET #{off} SIZE #{len} COUNT #{lerrors.length}"
+		end
+
+		errbyloc = gerrors.group_by {|e|e.off}
+		errbyloc.keys.sort.each_slice(FSDB_FINDBLK_MAXARGC) do |offsets|
+			fsblocks = offsets
+			dblocks = fsblocks
+			puts "  FINDBLK #{dblocks.join ' '}"
+			fsinfo.findblk(dblocks)
+		end
+	end
+
