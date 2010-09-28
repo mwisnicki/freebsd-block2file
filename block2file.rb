@@ -73,12 +73,12 @@ end
 $gmesh = GEOM.new
 
 class FSInfo
+	# underlying device (geom name)
+	attr_reader :dev
 	# sector size of geom provider
 	attr_reader :gsectorsize
 	# fsbtodb factor
 	attr_reader :fsbtodb
-	# underlying device (geom name)
-	attr_reader :dev
 
 	# Cache instances since REXML is dog slow
 	@@CACHED = {}
