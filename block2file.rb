@@ -38,7 +38,39 @@ def ffsinfo(dev)
 	end
 end
 
-$gmesh = REXML::Document.new `sysctl -b kern.geom.confxml`.strip
+class GEOM
+	# TODO follow @ref
+	# TODO convert to hash with inject
+	include REXML
+	def initialize
+		@gmesh = REXML::Document.new `sysctl -b kern.geom.confxml`.strip
+	end
+	def provider(name)
+		Obj.new XPath.first(@gmesh, '//provider[name=$name]', nil, 'name' => name)
+	end
+	private
+	class Obj
+		include REXML
+		def initialize(node)
+			@node = node
+		end
+		def method_missing(m, *args, &block)
+			# XXX child = XPath.first(@node, '$m', nil, 'm' => m)
+			child = XPath.first(@node, m.to_s)
+			if child.has_elements? then
+				Obj.new child
+			else
+				begin
+					Integer child.text
+				rescue ArgumentError
+					child.text
+				end
+			end
+		end
+	end
+end
+
+$gmesh = GEOM.new
 
 class FSInfo
 	# sector size of geom provider
@@ -62,8 +94,8 @@ class FSInfo
 		@dev = geomdev
 		@sblock = ffsinfo(dev).sblock
 		@fsbtodb = @sblock.fsbtodb
-		@gsectorsize = Integer REXML::XPath.
-			first($gmesh, '//provider[name=$dev]/sectorsize', nil, 'dev' => dev).text
+		@gprovider = $gmesh.provider(dev)
+		@gsectorsize = @gprovider.sectorsize
 	end
 
 	# @param offset geom offset in bytes
