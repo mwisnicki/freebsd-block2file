@@ -123,53 +123,48 @@ end
 
 GeomError = Struct.new(:date,:geom,:op,:off,:len)
 
+# XXX weird crap in trailing comments to fix broken vim indentation
 RE_GEOMERR = /
-	# GEOM_FOO
-	(GEOM_\S+): \s
-# g_foo_read_done() failed
-(\S+) \s failed \s
-# ad0s1d
-(\S+)
-# READ
-\[(\S+)\(
-	# in bytes
-	offset=(\d+),\s
-	length=(\d+)
-	\)\]
-	/x
+	(GEOM_\S+): \s			# GEOM_FOO \
+	(\S+) \s failed \s	# g_foo_read_done() failed \
+	(\S+) 							# ad0s1d \
+	\[(\S+)\(						# READ 				#\)\](
+		offset=(\d+),\s		# offset=1234,
+		length=(\d+)			# length=512
+\)\]/x
 
-	FSDB_FINDBLK_MAXARGC = 32
+FSDB_FINDBLK_MAXARGC = 32
 
-	errors = []
-	while gets do
-		for gclass,fun,geom,op,off,len in scan(RE_GEOMERR) do
-			begin # try to parse date like in syslog
-				date = DateTime.strptime($_, '%b %e %T')
-			rescue ArgumentError
-			end
-			errors << GeomError.new(date, geom, op, Integer(off), Integer(len))
+errors = []
+while gets do
+	for gclass,fun,geom,op,off,len in scan(RE_GEOMERR) do
+		begin # try to parse date like in syslog
+			date = DateTime.strptime($_, '%b %e %T')
+		rescue ArgumentError
 		end
+		errors << GeomError.new(date, geom, op, Integer(off), Integer(len))
+	end
+end
+
+for geom,gerrors in errors.group_by {|e|e.geom} do
+	puts "GEOM #{geom}"
+	fsinfo = FSInfo.get(geom)
+
+	# findblk handles up to 32 blocks per run
+
+	# Each offset+length is unique location
+	# Maybe group by offset and select largest length ?
+	for loc,lerrors in gerrors.group_by {|e|[e.off,e.len]} do
+		off,len = loc
+		puts "  OFFSET #{off} SIZE #{len} COUNT #{lerrors.length}"
 	end
 
-	for geom,gerrors in errors.group_by {|e|e.geom} do
-		puts "GEOM #{geom}"
-		fsinfo = FSInfo.get(geom)
-
-		# findblk handles up to 32 blocks per run
-
-		# Each offset+length is unique location
-		# Maybe group by offset and select largest length ?
-		for loc,lerrors in gerrors.group_by {|e|[e.off,e.len]} do
-			off,len = loc
-			puts "  OFFSET #{off} SIZE #{len} COUNT #{lerrors.length}"
-		end
-
-		errbyloc = gerrors.group_by {|e|e.off}
-		errbyloc.keys.sort.each_slice(FSDB_FINDBLK_MAXARGC) do |offsets|
-			fsblocks = offsets
-			dblocks = fsblocks
-			puts "  FINDBLK #{dblocks.join ' '}"
-			fsinfo.findblk(dblocks)
-		end
+	errbyloc = gerrors.group_by {|e|e.off}
+	errbyloc.keys.sort.each_slice(FSDB_FINDBLK_MAXARGC) do |offsets|
+		fsblocks = offsets
+		dblocks = fsblocks
+		puts "  FINDBLK #{dblocks.join ' '}"
+		fsinfo.findblk(dblocks)
 	end
+end
 
