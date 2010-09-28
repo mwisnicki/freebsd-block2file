@@ -50,13 +50,12 @@ class GEOM
 	end
 	private
 	class Obj
-		include REXML
 		def initialize(node)
 			@node = node
 		end
 		def method_missing(m, *args, &block)
-			# XXX child = XPath.first(@node, '$m', nil, 'm' => m)
-			child = XPath.first(@node, m.to_s)
+			# XXX child = REXML::XPath.first(@node, '$m', nil, 'm' => m)
+			child = REXML::XPath.first(@node, m.to_s)
 			if child.has_elements? then
 				Obj.new child
 			else
