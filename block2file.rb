@@ -5,6 +5,8 @@ require 'date'
 require 'ostruct'
 require 'rexml/document'
 
+# TODO break into libraries and utilities
+
 def OpenStruct.nested(hash)
 	OpenStruct.new(hash.inject({}) {|r,p|
 		r[p[0]] = p[1].kind_of?(Hash) ? OpenStruct.nested(p[1]) : p[1]; r
@@ -114,7 +116,7 @@ class FSInfo
 	end
 
 	def dputs(*args)
-		puts(*args) if true
+		puts(*args) if $DEBUG
 	end
 
 	# @param offset in bytes
@@ -141,20 +143,31 @@ class FSInfo
 	end
 
 	# @param disk_block number (up to 32)
-	# @return inode number or nil # TODO block=>[inode]
+	# @return map of blocks to inodes
+	# TODO move to separate class FSDB and keep process working between calls
+	# XXX reading before exit blocks no matter what, even with PTY.spawn, why? 
 	def findblk(*disk_blocks)
-		IO.popen "fsdb -r /dev/#{dev}",'w' do |fsdb|
+		IO.popen "fsdb -r /dev/#{dev}",'w+' do |fsdb|
 			# TODO fsdb.puts "help" and grab commands
-			#puts fsdb.read
 			fsdb.puts "findblk #{disk_blocks.join ' '}"
 			fsdb.puts "exit"
-			{} # TODO {block=>inode}
+			results = {}
+			fsdb.each_line do |line|
+				case line
+				when /(\d+): data block of inode (\d+)/
+					results[Integer $1] = Integer $2
+				end
+			end
+			results
 		end
 	end
 
+	# @param list of inodes
+	# @return list of paths
 	def findpaths(inodes)
-		return [] # TODO
-		`find -x #{dev} ( -inum #{inodes.join ' -or -inum '} ) -print0`.split
+		return [] if inodes.empty?
+		# XXX is fsmnt current or just previous mountpoint ?
+		`find -x #{fs.fsmnt} \\( -inum #{inodes.join ' -or -inum '} \\) -print0`.split "\0"
 	end
 end
 
@@ -164,7 +177,7 @@ FSDB_FINDBLK_MAXARGC = 32
 
 # GEOM_FOO: g_foo_read_done() failed ad0s1d[READ(offset=123456, length=512)]
 RE_GEOMERR = /(GEOM_\S+): (\S+) failed (\S+)\[(\S+)\(offset=(\d+), length=(\d+)\)\]/
-	//x # XXX fix vim indent
+	//x if false # XXX fix vim indent
 
 errors = []
 while gets do
@@ -187,19 +200,24 @@ for geom,gerrors in errors.group_by {|e|e.geom} do
 	# Maybe group by offset and select largest length ?
 	for loc,lerrors in gerrors.group_by {|e|[e.off,e.len]} do
 		off,len = loc
-		puts "  OFFSET #{off} SIZE #{len} COUNT #{lerrors.length}"
+		puts "ERROR OFFSET #{off} SIZE #{len} COUNT #{lerrors.length}"
 	end
 
 	inodes = {}
 	errbyloc = gerrors.group_by {|e|e.off}
 	errbyloc.keys.sort.each_slice(FSDB_FINDBLK_MAXARGC) do |offsets|
 		dblocks = offsets.map{|o| fsinfo.offset2diskblock(o)}
-		puts "  FINDBLK #{dblocks.join ' '}"
-		inodes.merge fsinfo.findblk(dblocks)
+		puts "FINDINODE BLOCKS #{dblocks.join ' '}"
+		inodes.merge! fsinfo.findblk(dblocks)
 	end
-	paths = fsinfo.findpaths inodes.values.uniq.sort
-	for path in paths do
-		puts "FILE \"#{path}\""
+	inums = inodes.values.uniq.sort
+	puts "FINDPATH \"#{fsinfo.fs.fsmnt}\" INODES #{inums.join ' '}"
+	blocks = inodes.group_by {|blk,ino|ino}
+	paths = fsinfo.findpaths inums
+	for path in paths.sort do
+		inode = File.stat(path).ino
+		blks = blocks[inode].map{|blk,ino|blk}
+		printf "PATH \"%s\" INODE %d BLOCKS %s\n", path, inode, blks.join(' ')
 	end
 end
 
