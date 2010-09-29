@@ -76,6 +76,8 @@ $gmesh = GEOM.new
 class FSInfo
 	# underlying device (geom name)
 	attr_reader :dev
+	# current mount point
+	attr_reader :mountpoint
 	# sector size of geom provider
 	attr_reader :gsectorsize
 	# filesystem superblock
@@ -94,8 +96,9 @@ class FSInfo
 	def initialize(geomdev)
 		@dev = geomdev
 		@fs = ffsinfo(dev).sblock
+		@mountpoint = fs.fsmnt # XXX is it current or just previous mountpoint ?
 		@gprovider = $gmesh.provider(dev)
-		@gsectorsize = 512 # XXX @gprovider.sectorsize
+		@gsectorsize = 512 # XXX why @gprovider.sectorsize is 4096 ?
 	end
 
 	# from ufs/ffs/fs.h:
@@ -166,7 +169,6 @@ class FSInfo
 	# @return list of paths
 	def findpaths(inodes)
 		return [] if inodes.empty?
-		# XXX is fsmnt current or just previous mountpoint ?
 		`find -x #{fs.fsmnt} \\( -inum #{inodes.join ' -or -inum '} \\) -print0`.split "\0"
 	end
 end
@@ -211,7 +213,7 @@ for geom,gerrors in errors.group_by {|e|e.geom} do
 		inodes.merge! fsinfo.findblk(dblocks)
 	end
 	inums = inodes.values.uniq.sort
-	puts "FINDPATH \"#{fsinfo.fs.fsmnt}\" INODES #{inums.join ' '}"
+	puts "FINDPATH \"#{fsinfo.mountpoint}\" INODES #{inums.join ' '}"
 	blocks = inodes.group_by {|blk,ino|ino}
 	paths = fsinfo.findpaths inums
 	for path in paths.sort do
