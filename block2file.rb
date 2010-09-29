@@ -76,8 +76,8 @@ class FSInfo
 	attr_reader :dev
 	# sector size of geom provider
 	attr_reader :gsectorsize
-	# fsbtodb factor
-	attr_reader :fsbtodb
+	# filesystem superblock
+	attr_reader :fs
 
 	# Cache instances since REXML is dog slow
 	@@CACHED = {}
@@ -91,32 +91,70 @@ class FSInfo
 	# @param geom device name
 	def initialize(geomdev)
 		@dev = geomdev
-		@sblock = ffsinfo(dev).sblock
-		@fsbtodb = @sblock.fsbtodb
+		@fs = ffsinfo(dev).sblock
 		@gprovider = $gmesh.provider(dev)
-		@gsectorsize = @gprovider.sectorsize
+		@gsectorsize = 512 # XXX @gprovider.sectorsize
 	end
 
-	# @param offset geom offset in bytes
-	# @return disk? block XXX verify
-	def goffset2diskblock(offset)
-		# TODO
+	# from ufs/ffs/fs.h:
+
+	def fsbtodb(b)
+		b << fs.fsbtodb
+	end
+	def dbtofsb(b)
+		b >> fs.fsbtodb
+	end
+	def fragnum(fsb)
+		# fsb % fs.frag
+		fsb & (fs.frag - 1)
+	end
+	def blknum(fsb)
+		# rounddown(fsb, fs.frag)
+		fsb &~ (fs.frag - 1)
 	end
 
-	# disk_block = fs_block * (2** fsbtodb)
-
-	def fs2disk_block(fs_block)
-		fs_block << fsbtodb
-	end
-	def disk2fs_block(disk_block)
-		disk_block >> fsbtodb
+	def dputs(*args)
+		puts(*args) if true
 	end
 
-	# @param disk_block number (TODO up to 32)
+	# @param offset in bytes
+	# @return disk block
+	def offset2diskblock(offset)
+		dputs "off #{offset} blk +#{offset % fs.bsize}"
+		# logical block number
+		lbn = offset / gsectorsize
+		dputs "lbn #{lbn}"
+		# disk block this lbn lies in
+		db = blknum(lbn)
+		dputs "db  #{db}"
+		# convert to fs block
+		fsb = dbtofsb(db)
+		dputs "fsb #{fsb}"
+		# add fragment number of this lbn
+		fsb += fragnum(lbn)
+		dputs "fragnum #{fragnum(lbn)}"
+		# convert back to disk block
+		db = fsbtodb(fsb)
+		dputs "db  #{db}"
+		dputs
+		db
+	end
+
+	# @param disk_block number (up to 32)
 	# @return inode number or nil # TODO block=>[inode]
-	def findblk(*disk_block)
-		# TODO
-		puts "FINDBLK #{disk_block.join ' '}"
+	def findblk(*disk_blocks)
+		IO.popen "fsdb -r /dev/#{dev}",'w' do |fsdb|
+			# TODO fsdb.puts "help" and grab commands
+			#puts fsdb.read
+			fsdb.puts "findblk #{disk_blocks.join ' '}"
+			fsdb.puts "exit"
+			{} # TODO {block=>inode}
+		end
+	end
+
+	def findpaths(inodes)
+		return [] # TODO
+		`find -x #{dev} ( -inum #{inodes.join ' -or -inum '} ) -print0`.split
 	end
 end
 
@@ -152,12 +190,16 @@ for geom,gerrors in errors.group_by {|e|e.geom} do
 		puts "  OFFSET #{off} SIZE #{len} COUNT #{lerrors.length}"
 	end
 
+	inodes = {}
 	errbyloc = gerrors.group_by {|e|e.off}
 	errbyloc.keys.sort.each_slice(FSDB_FINDBLK_MAXARGC) do |offsets|
-		fsblocks = offsets
-		dblocks = fsblocks
+		dblocks = offsets.map{|o| fsinfo.offset2diskblock(o)}
 		puts "  FINDBLK #{dblocks.join ' '}"
-		fsinfo.findblk(dblocks)
+		inodes.merge fsinfo.findblk(dblocks)
+	end
+	paths = fsinfo.findpaths inodes.values.uniq.sort
+	for path in paths do
+		puts "FILE \"#{path}\""
 	end
 end
 
